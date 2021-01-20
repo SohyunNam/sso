@@ -85,11 +85,20 @@ class Process(object):
         self.delay_part_id = []
         self.len_of_server = []
 
-    def _to_machine(self, part):
-        self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="Process_entered")
+        env.process(self._to_machine())
+        env.process(self._to_process())
+
+    def _to_machine(self):
+        while True:
+            part = yield self.buffer_to_machine.get()
+            self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="Process_entered")
+            ## Rouring logic 추가 할 예정
+            self.server_idx = 0 if (self.parts_sent == 0) or (
+                    self.server_idx == self.machine_num - 1) else self.server_idx + 1
 
 
-    def _to_process(self, part):
+
+    def _to_process(self):
         print(0)
 
 
@@ -102,10 +111,32 @@ class Machine(object):
         self.out = out
         self.monitor = monitor
 
+        env.process(self.work())
+        self.queue = simpy.Store(env, capacity=1)
+        self.working_start = 0.0
+        self.total_time = 0.0
+        self.total_working_time = 0.0
         self.working = False
 
-    def work(self, part):
-        print(0)
+    def work(self):
+        while True:
+            part = yield self.queue.get()
+            self.working = True
+
+            # process_time
+            if self.process_time == None:  # part에 process_time이 미리 주어지는 경우
+                proc_time = part.data[(part.step, "process_time")]
+            else:  # service time이 정해진 경우 --> 1) fixed time / 2) Stochastic-time
+                proc_time = self.process_time if type(self.process_time) == float else self.process_time()
+
+            # working
+            self.working_start = self.env.now
+            yield self.env.timeout(proc_time)
+
+            # delay: buffer_to_process의 capacity가 차 있을 때
+            if len(self.out) == self.out.capacity:
+                print(0)
+
 
 
 class Sink(object):
