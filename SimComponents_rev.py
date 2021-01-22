@@ -1,7 +1,9 @@
 import simpy
 import os
+import random
 import pandas as pd
 import numpy as np
+from collections import OrderedDict
 
 save_path = './result'
 if not os.path.exists(save_path):
@@ -76,43 +78,50 @@ class Process(object):
         self.buffer_to_machine = simpy.Store(env, capacity=capa_to_machine)
         self.buffer_to_process = simpy.Store(env, capacity=capa_to_process)
         self.machine = [Machine(env, '{0}_{1}'.format(self.name, i + 1), process_time=self.process_time[i],
-                                priority=self.priority[i], out=self.buffer_to_process, monitor=monitor) for i in
-                        range(self.machine_num)]
+                                priority=self.priority[i], out=self.buffer_to_process, waiting=self.waiting_machine,
+                                monitor=monitor) for i in range(self.machine_num)]
 
         self.parts_sent = 0
-        self.server_idx = 0
-        self.waiting = {}
-        self.delay_part_id = []
+        self.machine_idx = 0
         self.len_of_server = []
+        self.waiting_machine = OrderedDict()
+        self.waiting_preprocess = OrderedDict()
 
         env.process(self._to_machine())
         env.process(self._to_process())
 
     def _to_machine(self):
+        routing = Routing(self.machine, priority=self.priority)
         while True:
             part = yield self.buffer_to_machine.get()
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="Process_entered")
             ## Rouring logic 추가 할 예정
-            self.server_idx = 0 if (self.parts_sent == 0) or (
-                    self.server_idx == self.machine_num - 1) else self.server_idx + 1
+            if self.routing_logic == 'priority':
+                self.machine_idx = routing.priority()
+            else:
+                self.machine_idx = 0 if (self.parts_sent == 0) or (
+                    self.machine_idx == self.machine_num - 1) else self.machine_idx + 1
 
-
+            self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="routing_ended")
+            self.machine[self.machine_idx].machine.put(part)
 
     def _to_process(self):
-        print(0)
+        while True:
+            part = yield self.buffer_to_process.get()
 
 
 class Machine(object):
-    def __init__(self, env, name, process_time, priority, out, monitor):
+    def __init__(self, env, name, process_time, priority, out, waiting, monitor):
         self.env = env
         self.name = name
         self.process_time = process_time
         self.priority = priority
         self.out = out
+        self.waiting = waiting
         self.monitor = monitor
 
         env.process(self.work())
-        self.queue = simpy.Store(env, capacity=1)
+        self.machine = simpy.Store(env, capacity=1)
         self.working_start = 0.0
         self.total_time = 0.0
         self.total_working_time = 0.0
@@ -120,8 +129,10 @@ class Machine(object):
 
     def work(self):
         while True:
-            part = yield self.queue.get()
+            part = yield self.machine.get()
             self.working = True
+            process_name = self.name.split('_')[0]
+            self.monitor.record(self.env.now, process_name, self.name, part_id=part.id, event="work_start")
 
             # process_time
             if self.process_time == None:  # part에 process_time이 미리 주어지는 경우
@@ -132,11 +143,21 @@ class Machine(object):
             # working
             self.working_start = self.env.now
             yield self.env.timeout(proc_time)
+            self.total_working_time += self.env.now - self.working_start
+            self.monitor.record(self.env.now, process_name, self.name, part_id=part.id, event="work_finish")
 
-            # delay: buffer_to_process의 capacity가 차 있을 때
+            # start delaying at machine cause buffer_to_process is full
             if len(self.out) == self.out.capacity:
-                print(0)
+                self.waiting[part.id] = self.env.event()
+                self.monitor.record(self.env.now, process_name, self.name, part_id=part.id, event="delay_start")
+                yield self.waiting[part.id]  # start delaying
+                self.monitor.record(self.env.now, process_name, self.name, part_id=part.id, event="delay_finish")
 
+            # transfer to '_to_process' function
+            self.out.put(part)
+            self.monitor.record(self.env.now, process_name, self.name, part_id=part.id, event="part_transferred")
+            self.working = False
+            self.total_time += self.env.now - self.working_start
 
 
 class Sink(object):
@@ -182,4 +203,29 @@ class Monitor(object):
         event_tracer.to_csv(self.filepath)
 
         return event_tracer
+
+
+class Routing(object):
+    def __init__(self, server_list=None, priority=None):
+        self.server_list = server_list
+        self.idx_priority = np.array(priority)
+
+    def priority(self):
+        i = min(self.idx_priority)
+        idx = 0
+        while i < max(self.idx_priority):
+            min_idx = np.argwhere(self.idx_priority == i)  # priority가 작은 숫자의 index부터 추출
+            idx_min_list = min_idx.flatten().tolist()
+            # 해당 index list에서 machine이 idling인 index만 추출
+            idx_list = list(filter(lambda i: (self.server_list[i].working == False), idx_min_list))
+            if len(idx_list) > 0:  # 만약 priority가 높은 machine 중 idle 상태에 있는 machine이 존재한다면
+                idx = random.choice(idx_list)
+                break
+            else:  # 만약 idle 상태에 있는 machine이 존재하지 않는다면
+                if i == max(self.idx_priority) - 1:  # 그 중 모든 priority에 대해 machine이 가동중이라면
+                    i = 0  # 다시 while문 순환 돌림
+                else:
+                    i += 1  # 다음 priority에 대하여 따져봄
+        return idx
+
 
