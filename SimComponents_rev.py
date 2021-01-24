@@ -156,7 +156,7 @@ class Machine(object):
         self.total_time = 0.0
         self.total_working_time = 0.0
         self.working = False  # whether machine've worked(True) or idled(False)
-        self.broken = False  # whether machine is broken or not 
+        self.broken = False  # whether machine is broken or not
 
         # get run functions in class
         self.action = env.process(self.work())
