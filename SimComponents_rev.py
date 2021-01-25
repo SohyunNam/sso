@@ -3,12 +3,58 @@ import os
 import random
 import pandas as pd
 import numpy as np
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 
 save_path = './result'
 if not os.path.exists(save_path):
     os.makedirs(save_path)
 
+class Resource(object):
+    def __init__(self, env, tp_info, wf_info, model, monitor):
+        self.env = env
+        self.model = model
+        self.monitor = monitor
+
+        # resource 할당
+        self.tp_store = simpy.FilterStore(env)
+        self.wf_store = simpy.FilterStore(env)
+        transporter = namedtuple("Transporter", "name, capa, v_loaded, v_unloaded")
+        workforce = namedtuple("Workforce", "name, skill")
+        for name in tp_info.keys():
+            self.tp_store.put(transporter(name, tp_info[name]["capa"], tp_info[name]["v_loaded"], tp_info[name]["v_unloaded"]))
+        for name in wf_info.keys():
+            self.wf_store.put(workforce(name, wf_info[name]["skill"]))
+
+        # resource 위치 파악
+        self.tp_location = {}
+        self.wf_location = {}
+        for name in tp_info.keys():
+            self.tp_location[name] = []
+        for name in wf_info.keys():
+            self.wf_location[name] = []
+
+    def request_tp(self, process_requesting, next_process, distance_to_requesting, distance_to_destination, min_capa, part=None):
+        self.monitor.record(self.env.now, process_requesting, None, part_id=part.id, event="tp_request")
+        if len(self.tp_store.items) > 0:
+            tp = yield self.tp_store.get(lambda item: item.capa == min_capa)
+        else:
+            tp_location_list = []
+            for name in self.tp_location.keys():
+                tp_location_list.append(self.tp_location[name][-1])
+            location = random.choice(tp_location_list)
+            tp = yield self.model[location].tp_store.get(lambda item: item.capa == min_capa)
+
+        yield self.env.timeout(distance_to_requesting / tp.v_unloaded)
+        self.monitor.record(self.env.now, process_requesting, None, part_id=part.id, event="tp_arriving")
+        yield self.env.timeout(distance_to_destination / tp.v_loaded)
+        self.monitor.record(self.env.now, process_requesting, None, part_id=part.id, event="tp_released")
+        self.model[next_process].put(part)
+
+        self.model[next_process].tp_store.put(tp)
+        self.tp_location[tp.name].append(next_process)
+
+    def request_wf(self, process_requesting):
+        print(0)
 
 class Part(object):
     def __init__(self, name, data):
@@ -29,7 +75,6 @@ class Source(object):
         self.monitor = monitor
 
         self.action = env.process(self.run())
-        self.parts_len = len(self.parts[:])
 
     def run(self):
         while True:
@@ -54,14 +99,15 @@ class Source(object):
 
 
 class Process(object):
-    def __init__(self, env, name, machine_num, model, monitor, process_time=None, capacity=float('inf'),
+    def __init__(self, env, name, machine_num, model, monitor, resource=None, process_time=None, capacity=float('inf'),
                  routing_logic='cyclic', priority=None, capa_to_machine=float('inf'), capa_to_process=float('inf'),
-                 MTTR=None, MTTF=None):
+                 MTTR=None, MTTF=None, delaying=None):
         # input data
         self.env = env
         self.name = name
         self.model = model
         self.monitor = monitor
+        self.resource = resource
         self.process_time = process_time[self.name] if process_time is not None else [None for _ in range(machine_num)]
         self.capa = capacity
         self.machine_num = machine_num
@@ -69,6 +115,7 @@ class Process(object):
         self.priority = priority[self.name] if priority is not None else [1 for _ in range(machine_num)]
         self.MTTR = MTTR[self.name] if MTTR is not None else [None for _ in range(machine_num)]
         self.MTTF = MTTF[self.name] if MTTF is not None else [None for _ in range(machine_num)]
+        self.delaying = delaying
 
         # variable defined in class
         self.parts_sent = 0
@@ -91,6 +138,10 @@ class Process(object):
     def to_machine(self):
         routing = Routing(self.machine, priority=self.priority)
         while True:
+            if self.delaying is not None:
+                delaying_time = self.delaying if type(self.delaying) == float else self.delaying()
+                yield self.env.timeout(delaying_time)
+
             part = yield self.buffer_to_machine.get()
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="Process_entered")
             ## Rouring logic 추가 할 예정
