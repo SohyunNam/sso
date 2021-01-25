@@ -29,6 +29,7 @@ class Source(object):
         self.monitor = monitor
 
         self.action = env.process(self.run())
+        self.parts_len = len(self.parts[:])
 
     def run(self):
         while True:
@@ -48,6 +49,7 @@ class Source(object):
 
             if len(self.parts) == 0:
                 print("all parts are sent at : ", self.env.now)
+
                 break
 
 
@@ -65,6 +67,8 @@ class Process(object):
         self.machine_num = machine_num
         self.routing_logic = routing_logic
         self.priority = priority[self.name] if priority is not None else [1 for _ in range(machine_num)]
+        self.MTTR = MTTR[self.name] if MTTR is not None else [None for _ in range(machine_num)]
+        self.MTTF = MTTF[self.name] if MTTF is not None else [None for _ in range(machine_num)]
 
         # variable defined in class
         self.parts_sent = 0
@@ -78,7 +82,7 @@ class Process(object):
         self.buffer_to_process = simpy.Store(env, capacity=capa_to_process)
         self.machine = [Machine(env, '{0}_{1}'.format(self.name, i + 1), process_time=self.process_time[i],
                                 priority=self.priority[i], out=self.buffer_to_process, waiting=self.waiting_machine,
-                                monitor=monitor, MTTF=MTTF[i], MTTR=MTTR[i]) for i in range(self.machine_num)]
+                                monitor=monitor, MTTF=self.MTTF[i], MTTR=self.MTTR[i]) for i in range(self.machine_num)]
 
         # get run functions in class
         env.process(self.to_machine())
@@ -148,7 +152,8 @@ class Machine(object):
         self.out = out
         self.waiting = waiting
         self.monitor = monitor
-        self.MTTR = MTTR
+        self.MTTR = MTTR if (type(MTTR) == float) or (MTTR is None) else MTTR()
+        self.MTTF = MTTF if (type(MTTF) == float) or (MTTF is None) else MTTF()
 
         # variable defined in class
         self.machine = simpy.Store(env, capacity=1)
@@ -160,11 +165,12 @@ class Machine(object):
 
         # get run functions in class
         self.action = env.process(self.work())
-        if MTTF is not None:
-            env.process(self.break_machine(MTTF))
+        if self.MTTF is not None:
+            env.process(self.break_machine(self.MTTF))
 
     def work(self):
         while True:
+            self.broken = True
             part = yield self.machine.get()
             self.working = True
             process_name = self.name[:-2]
@@ -175,6 +181,7 @@ class Machine(object):
             else:  # service time이 정해진 경우 --> 1) fixed time / 2) Stochastic-time
                 proc_time = self.process_time if type(self.process_time) == float else self.process_time()
 
+            self.broken = False
             while proc_time:
                 try:
                     ## working start
@@ -189,10 +196,14 @@ class Machine(object):
                     proc_time = 0.0
 
                 except simpy.Interrupt:
+                    self.monitor.record(self.env.now, process_name, self.name, part_id=part.id,
+                                        event="machine_broken")
                     self.broken = True
                     proc_time -= self.env.now - self.working_start
-                    yield self.env.timeout(self.MTTR())
-                    self.broken = False
+                    yield self.env.timeout(self.MTTR)
+                    self.monitor.record(self.env.now, process_name, self.name, part_id=part.id,
+                                        event="machine_rerunning")
+
 
             # start delaying at machine cause buffer_to_process is full
             if len(self.out.items) == self.out.capacity:
@@ -209,12 +220,14 @@ class Machine(object):
                                 event="part_transferred")
             self.working = False
             self.total_time += self.env.now - self.working_start
+            self.broken = False
 
     def break_machine(self, mttf):
-        while True:
-            yield self.env.timeout(mttf())
+        while self.monitor.event.count('part_created') < self.monitor.event.count('completed'):
+            yield self.env.timeout(mttf)
             if not self.broken:
                 self.action.interrupt()
+
 
 
 class Sink(object):
