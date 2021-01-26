@@ -9,11 +9,13 @@ save_path = './result'
 if not os.path.exists(save_path):
     os.makedirs(save_path)
 
+
 class Resource(object):
-    def __init__(self, env, tp_info, wf_info, model, monitor):
+    def __init__(self, env, tp_info, wf_info, model, monitor, delay_time):
         self.env = env
         self.model = model
         self.monitor = monitor
+        self.delay_time = delay_time
 
         # resource 할당
         self.tp_store = simpy.FilterStore(env)
@@ -56,6 +58,11 @@ class Resource(object):
     def request_wf(self, process_requesting):
         print(0)
 
+    def delaying(self):
+        yield self.env.timeout(self.delay_time)
+        return
+
+
 class Part(object):
     def __init__(self, name, data):
         # 해당 Part의 이름
@@ -86,11 +93,12 @@ class Source(object):
 
             # record: part_created
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_created")
-
+            # print(part.id, 'is created at ', self.env.now)
             # next process
             next_process = part.data[(part.step, 'process')]
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred")
             self.model[next_process].buffer_to_machine.put(part)
+            # print(part.id, 'is transferred to ', next_process, 'at ', self.env.now)
 
             if len(self.parts) == 0:
                 print("all parts are sent at : ", self.env.now)
@@ -101,7 +109,7 @@ class Source(object):
 class Process(object):
     def __init__(self, env, name, machine_num, model, monitor, resource=None, process_time=None, capacity=float('inf'),
                  routing_logic='cyclic', priority=None, capa_to_machine=float('inf'), capa_to_process=float('inf'),
-                 MTTR=None, MTTF=None, delaying=None):
+                 MTTR=None, MTTF=None, delay_time=None):
         # input data
         self.env = env
         self.name = name
@@ -115,7 +123,7 @@ class Process(object):
         self.priority = priority[self.name] if priority is not None else [1 for _ in range(machine_num)]
         self.MTTR = MTTR[self.name] if MTTR is not None else [None for _ in range(machine_num)]
         self.MTTF = MTTF[self.name] if MTTF is not None else [None for _ in range(machine_num)]
-        self.delaying = delaying
+        self.delay_time = delay_time[name] if delay_time is not None else None
 
         # variable defined in class
         self.parts_sent = 0
@@ -138,11 +146,12 @@ class Process(object):
     def to_machine(self):
         routing = Routing(self.machine, priority=self.priority)
         while True:
-            if self.delaying is not None:
-                delaying_time = self.delaying if type(self.delaying) == float else self.delaying()
+            print('delaying start at', self.env.now, 'in ', self.name)
+            if self.delay_time is not None:
+                delaying_time = self.delay_time if type(self.delay_time) == float else self.delay_time()
                 yield self.env.timeout(delaying_time)
-
             part = yield self.buffer_to_machine.get()
+            print('{0} gets in in_buffer of {1} at {2}'.format(part.id, self.name, self.env.now))
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="Process_entered")
             ## Rouring logic 추가 할 예정
             if self.routing_logic == 'priority':
@@ -153,6 +162,7 @@ class Process(object):
 
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="routing_ended")
             self.machine[self.machine_idx].machine.put(part)
+            print('{0} go to {1}_{2} at {3}'.format(part.id, self.name , self.machine_idx, self.env.now))
 
             # finish delaying of pre-process
             if (len(self.buffer_to_machine.items) < self.buffer_to_machine.capacity) and (len(self.waiting_pre_process) > 0):
@@ -161,7 +171,7 @@ class Process(object):
     def to_process(self):
         while True:
             part = yield self.buffer_to_process.get()
-
+            print('{0} gets in out_buffer of {1} at {2}'.format(part.id, self.name, self.env.now))
             # next process
             step = 1
             while not part.data[(part.step + step, 'process_time')]:
@@ -188,6 +198,7 @@ class Process(object):
                 self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred")
 
             part.step += step
+            print('{0} gets off to {1} at {2}'.format(part.id, next_process_name, self.env.now))
 
             if (len(self.buffer_to_process.items) < self.buffer_to_process.capacity) and (len(self.waiting_machine) > 0):
                 self.waiting_machine.popitem(last=False)[1].succeed()  # delay = (part_id, event)
@@ -203,26 +214,29 @@ class Machine(object):
         self.out = out
         self.waiting = waiting
         self.monitor = monitor
-        self.MTTR = MTTR if (type(MTTR) == float) or (MTTR is None) else MTTR()
-        self.MTTF = MTTF if (type(MTTF) == float) or (MTTF is None) else MTTF()
+        self.MTTR = MTTR
+        self.MTTF = MTTF
 
         # variable defined in class
         self.machine = simpy.Store(env, capacity=1)
         self.working_start = 0.0
         self.total_time = 0.0
         self.total_working_time = 0.0
-        self.working = False  # whether machine've worked(True) or idled(False)
+        self.working = False  # whether machine's worked(True) or idled(False)
         self.broken = False  # whether machine is broken or not
 
         # get run functions in class
         self.action = env.process(self.work())
-        if self.MTTF is not None:
+        if (self.MTTF is not None) and (self.MTTR is not None):
             env.process(self.break_machine(self.MTTF))
 
     def work(self):
         while True:
             self.broken = True
             part = yield self.machine.get()
+
+            # if self.name[:-2] == 'LineHeating':
+            #     print('{0} gets in {1} at {2}'.format(part.id, self.name, self.env.now))
             self.working = True
             process_name = self.name[:-2]
 
@@ -232,9 +246,9 @@ class Machine(object):
             else:  # service time이 정해진 경우 --> 1) fixed time / 2) Stochastic-time
                 proc_time = self.process_time if type(self.process_time) == float else self.process_time()
 
-            self.broken = False
             while proc_time:
                 try:
+                    self.broken = False
                     ## working start
                     self.monitor.record(self.env.now, process_name, self.name, part_id=part.id, event="work_start")
                     self.working_start = self.env.now
@@ -243,19 +257,24 @@ class Machine(object):
                     ## working finish
                     self.monitor.record(self.env.now, process_name, self.name, part_id=part.id, event="work_finish")
                     self.total_working_time += self.env.now - self.working_start
-
+                    self.broken = True
                     proc_time = 0.0
 
                 except simpy.Interrupt:
+                    self.broken = True
                     self.monitor.record(self.env.now, process_name, self.name, part_id=part.id,
                                         event="machine_broken")
-                    self.broken = True
+                    print('{0} is broken at '.format(self.name), self.env.now)
                     proc_time -= self.env.now - self.working_start
-                    yield self.env.timeout(self.MTTR)
+                    if self.MTTR is not None:
+                        repair_time = self.MTTR if type(self.MTTR) == float else self.MTTR()
+                        yield self.env.timeout(repair_time)
                     self.monitor.record(self.env.now, process_name, self.name, part_id=part.id,
                                         event="machine_rerunning")
+                    print(self.name, 'is solved at ', self.env.now)
+                    self.broken = False
 
-
+            self.working = False
             # start delaying at machine cause buffer_to_process is full
             if len(self.out.items) == self.out.capacity:
                 self.waiting[part.id] = self.env.event()
@@ -265,20 +284,21 @@ class Machine(object):
                 self.monitor.record(self.env.now, process_name, self.name, part_id=part.id,
                                     event="delay_finish_machine")
 
-            # transfer to '_to_process' function
+            # transfer to 'to_process' function
             self.out.put(part)
             self.monitor.record(self.env.now, process_name, self.name, part_id=part.id,
                                 event="part_transferred")
-            self.working = False
+            print('{0} gets off to {1} at {2}'.format(part.id, self.name, self.env.now))
             self.total_time += self.env.now - self.working_start
-            self.broken = False
 
     def break_machine(self, mttf):
-        while self.monitor.event.count('part_created') < self.monitor.event.count('completed'):
-            yield self.env.timeout(mttf)
+        while True:
+            mttf_time = mttf if type(mttf) == float else mttf()
+            yield self.env.timeout(mttf_time)
             if not self.broken:
                 self.action.interrupt()
-
+            if (self.monitor.event.count('completed') > 0) and (self.monitor.event.count('part_created') == self.monitor.event.count('completed')):
+                break
 
 
 class Sink(object):
@@ -292,6 +312,7 @@ class Sink(object):
         self.last_arrival = 0.0
 
     def put(self, part):
+        print('{0} gets in Sink at {1}'.format(part.id, self.env.now))
         self.parts_rec += 1
         self.last_arrival = self.env.now
         self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="completed")
@@ -334,7 +355,7 @@ class Routing(object):
     def priority(self):
         i = min(self.idx_priority)
         idx = 0
-        while i < max(self.idx_priority):
+        while i <= max(self.idx_priority):
             min_idx = np.argwhere(self.idx_priority == i)  # priority가 작은 숫자의 index부터 추출
             idx_min_list = min_idx.flatten().tolist()
             # 해당 index list에서 machine이 idling인 index만 추출
@@ -343,8 +364,8 @@ class Routing(object):
                 idx = random.choice(idx_list)
                 break
             else:  # 만약 idle 상태에 있는 machine이 존재하지 않는다면
-                if i == max(self.idx_priority) - 1:  # 그 중 모든 priority에 대해 machine이 가동중이라면
-                    i = 0  # 다시 while문 순환 돌림
+                if i == max(self.idx_priority):  # 그 중 모든 priority에 대해 machine이 가동중이라면
+                    idx = random.choice([j for j in range(len(self.idx_priority))])  # 그냥 무작위 배정
                 else:
                     i += 1  # 다음 priority에 대하여 따져봄
         return idx
