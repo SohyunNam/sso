@@ -9,7 +9,7 @@ from SimComponents_rev import Part, Sink, Process, Source, Monitor
 start_run = time.time()
 env = simpy.Environment()
 
-blocks = 1000
+blocks = 22000
 process_list = ['Cutting', 'Bending', 'LineHeating']
 part = [i+1 for i in range(blocks)]
 columns = pd.MultiIndex.from_product([[i for i in range(len(process_list)+1)], ['start_time', 'process_time', 'process']])
@@ -35,6 +35,16 @@ df[(1, 'process_time')] = process_time_2[process_time_2 > 0][:blocks]
 process_time_3 = st.norm.rvs(loc=3.0, size=100000)
 df[(2, 'process_time')] = process_time_3[process_time_3 > 0][:blocks]
 
+tp_info = {}
+wf_info = {}
+
+tp_info["TP_1"] = {"capa":100, "v_loaded":0.5, "v_unloaded":1.0}
+tp_info["TP_2"] = {"capa":100, "v_loaded":0.3, "v_unloaded":0.8}
+tp_info["TP_3"] = {"capa":100, "v_loaded":0.2, "v_unloaded":0.7}
+
+wf_info["WF_1"] = {"skill":1.0}
+wf_info["WF_2"] = {"skill":1.2}
+
 parts = []
 for i in range(len(df)):
     parts.append(Part(df.index[i], df.iloc[i]))
@@ -46,27 +56,27 @@ Monitor = Monitor(filepath)
 each_MTTF = functools.partial(np.random.triangular, 432, 480, 528)
 each_MTTR = functools.partial(np.random.triangular, 3.6, 4.0, 4.4)
 delay_time = functools.partial(np.random.triangular, 1/6, 1/4, 1/3)
+
 delaying = {}
 delaying['Cutting'] = delay_time
 delaying['Bending'] = delay_time
 delaying['LineHeating'] = delay_time
 
 MTTF = {}
-MTTR = {}
-
 MTTF['Cutting'] = [None for _ in range(7)]
 MTTF['Bending'] = [each_MTTF, each_MTTF, each_MTTF, each_MTTF]
 MTTF['LineHeating'] = [each_MTTF, each_MTTF, None, None, None, None, None, None]
 
+MTTR = {}
 MTTR['Cutting'] = [None for _ in range(7)]
 MTTR['Bending'] = [each_MTTR for _ in range(4)]
 MTTR['LineHeating'] = [each_MTTR, each_MTTR, None, None, None, None, None, None]
 
-model = {}
-Source = Source(env, parts, model, Monitor)
 priority = {}
 priority['LineHeating'] = [1, 1, 2, 2, 2, 2, 2, 2]
 
+model = {}
+Source = Source(env, parts, model, Monitor)
 model['Cutting'] = Process(env, 'Cutting', server_num[0], model, Monitor, delay_time=delaying)
 model['Bending'] = Process(env, 'Bending', server_num[1], model, Monitor, MTTR=MTTR, MTTF=MTTF, delay_time=delaying)
 model['LineHeating'] = Process(env, 'LineHeating', server_num[2], model, Monitor, routing_logic='priority', priority=priority, MTTR=MTTR, MTTF=MTTF, delay_time=delaying)
@@ -89,5 +99,6 @@ print("simulation execution time :", finish - start)
 
 print('#' * 80)
 print("Makespan : ", model['Sink'].last_arrival)
+print("The number of blocks that had been in Simulation is ", model['Sink'].parts_rec)
 
 event_tracer = Monitor.save_event_tracer()

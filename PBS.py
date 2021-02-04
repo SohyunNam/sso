@@ -6,7 +6,7 @@ import simpy
 import time
 import functools
 
-from SimComponents_rev import Source, Sink, Process, Monitor, Part
+from SimComponents_rev import Source, Sink, Process, Monitor, Part, Resource
 
 # 코드 실행 시작 시각
 start_run = time.time()
@@ -45,15 +45,16 @@ for i in range(len(process_list) + 1):
 
 for i in range(len(df)):
     parts.append(Part(df.index[i], df.iloc[i]))
-# tp_info = {}
-# wf_info = {}
-#
-# tp_info["TP_1"] = {"capa":100, "v_loaded":0.5, "v_unloaded":1.0}
-# tp_info["TP_2"] = {"capa":100, "v_loaded":0.3, "v_unloaded":0.8}
-# tp_info["TP_3"] = {"capa":100, "v_loaded":0.2, "v_unloaded":0.7}
-#
-# wf_info["WF_1"] = {"skill":1.0}
-# wf_info["WF_2"] = {"skill":1.2}
+
+tp_info = {}
+wf_info = {}
+
+tp_info["TP_1"] = {"capa":100, "v_loaded":0.5, "v_unloaded":1.0}
+tp_info["TP_2"] = {"capa":100, "v_loaded":0.3, "v_unloaded":0.8}
+tp_info["TP_3"] = {"capa":100, "v_loaded":0.2, "v_unloaded":0.7}
+
+wf_info["WF_1"] = {"skill":1.0}
+wf_info["WF_2"] = {"skill":1.2}
 
 # Modeling
 env = simpy.Environment()
@@ -63,7 +64,7 @@ model = {}
 server_num = [1 for _ in range(len(process_list))]
 filepath = './result/event_log_PBS_fin_tp.csv'
 Monitor = Monitor(filepath)
-# Resource = Resource(env, tp_info, wf_info, model, Monitor)
+Resource = Resource(env, tp_info, wf_info, model, Monitor)
 each_MTTF = functools.partial(np.random.exponential, 5)
 each_MTTR = functools.partial(np.random.exponential, 3)
 MTTR = {}
@@ -73,10 +74,15 @@ for process in process_list:
         MTTR[process] = [each_MTTR]
         MTTF[process] = [each_MTTF]
     else:
-        MTTR[process] = [None]
-        MTTF[process] = [None]
+        MTTR[process] = None
+        MTTF[process] = None
 
-
+workforce = {}
+for name in process_list:
+    if name !='saw_front':
+        workforce[name] = [True]
+    else:
+        workforce[name] = None
 # Source
 Source = Source(env, parts, model, Monitor)
 
@@ -85,7 +91,7 @@ for i in range(len(process_list) + 1):
     if i == len(process_list):
         model['Sink'] = Sink(env, Monitor)
     else:
-        model[process_list[i]] = Process(env, process_list[i], server_num[i], model, Monitor, MTTR=MTTR, MTTF=MTTF)
+        model[process_list[i]] = Process(env, process_list[i], server_num[i], model, Monitor, resource=Resource, MTTR=MTTR, MTTF=MTTF, workforce=workforce)
 
 # Simulation
 start = time.time()  # 시뮬레이션 실행 시작 시각
