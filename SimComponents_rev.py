@@ -5,13 +5,12 @@ import pandas as pd
 import numpy as np
 from collections import OrderedDict, namedtuple
 
-save_path = './result'
-if not os.path.exists(save_path):
-    os.makedirs(save_path)
-
+#save_path = './result'
+#if not os.path.exists(save_path):
+#    os.makedirs(save_path)
 
 class Resource(object):
-    def __init__(self, env, tp_info, wf_info, model, monitor, delay_time=None):
+    def __init__(self, env, model, monitor, tp_info=None, wf_info=None, delay_time=None):
         self.env = env
         self.model = model
         self.monitor = monitor
@@ -20,20 +19,19 @@ class Resource(object):
         # resource 할당
         self.tp_store = simpy.FilterStore(env)
         self.wf_store = simpy.FilterStore(env)
-        transporter = namedtuple("Transporter", "name, capa, v_loaded, v_unloaded")
-        workforce = namedtuple("Workforce", "name, skill")
-        for name in tp_info.keys():
-            self.tp_store.put(transporter(name, tp_info[name]["capa"], tp_info[name]["v_loaded"], tp_info[name]["v_unloaded"]))
-        for name in wf_info.keys():
-            self.wf_store.put(workforce(name, wf_info[name]["skill"]))
-
         # resource 위치 파악
         self.tp_location = {}
         self.wf_location = {}
-        for name in tp_info.keys():
-            self.tp_location[name] = []
-        for name in wf_info.keys():
-            self.wf_location[name] = []
+        transporter = namedtuple("Transporter", "name, capa, v_loaded, v_unloaded")
+        workforce = namedtuple("Workforce", "name, skill")
+        if tp_info is not None:
+            for name in tp_info.keys():
+                self.tp_location[name] = []
+                self.tp_store.put(transporter(name, tp_info[name]["capa"], tp_info[name]["v_loaded"], tp_info[name]["v_unloaded"]))
+        if wf_info is not None:
+            for name in wf_info.keys():
+                self.wf_location[name] = []
+                self.wf_store.put(workforce(name, wf_info[name]["skill"]))
 
         # No resource is in resource store -> machine hv to wait
         self.waiting_for_workforce = OrderedDict()
@@ -121,14 +119,13 @@ class Process(object):
         self.capa = capacity
         self.machine_num = machine_num
         self.routing_logic = routing_logic
-        self.process_time = process_time[self.name] if process_time[self.name] is not None else [None for _ in
-                                                                                                 range(machine_num)]
-        self.priority = priority[self.name] if priority[self.name] is not None else [1 for _ in range(machine_num)]
-        self.MTTR = MTTR[self.name] if MTTR[self.name] is not None else [None for _ in range(machine_num)]
-        self.MTTF = MTTF[self.name] if MTTF[self.name] is not None else [None for _ in range(machine_num)]
+        self.process_time = process_time[self.name] if process_time[self.name] is not None else [None for _ in range(machine_num)]
+        self.priority = priority[self.name] if priority is not None else [1 for _ in range(machine_num)]
+        self.MTTR = MTTR[self.name] if MTTR is not None else [None for _ in range(machine_num)]
+        self.MTTF = MTTF[self.name] if MTTF is not None else [None for _ in range(machine_num)]
         self.initial_broken_delay = initial_broken_delay[self.name] if initial_broken_delay is not None else [None for _ in range(machine_num)]
         self.delay_time = delay_time[name] if delay_time is not None else None
-        self.workforce = workforce[self.name] if workforce[self.name] is not None else [False for _ in range(machine_num)]
+        self.workforce = workforce[self.name] if workforce is not None else [False for _ in range(machine_num)]
 
         # variable defined in class
         self.parts_sent = 0
