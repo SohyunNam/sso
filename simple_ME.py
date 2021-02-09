@@ -6,14 +6,13 @@ import time
 import functools
 import matplotlib.pyplot as plt
 
-workforces = 20
+workforces = 2
 blocks = 50000
 SIM_TIME = 50000
 process_list = ['Process1', 'Process2', 'Process3']
 output = {}
-output[0] = 0
 
-for i in range(1, workforces+1):
+for i in range(2, workforces+1):
     from SimComponents_rev import Part, Sink, Process, Source, Monitor, Resource
     env = simpy.Environment()
     # df_part: part_id
@@ -77,6 +76,8 @@ for i in range(1, workforces+1):
 
     env.run(until=SIM_TIME)
     output[i] = model['Sink'].parts_rec
+    for name in process_list:
+        print("{0} : {1}".format(name, model[name].machine[0].total_working_time/model[name].parts_sent))
     event_tracer = Monitor.save_event_tracer()
     event_tracer.to_csv(filepath)
 

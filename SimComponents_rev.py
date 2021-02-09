@@ -32,9 +32,8 @@ class Resource(object):
             for name in wf_info.keys():
                 self.wf_location[name] = []
                 self.wf_store.put(workforce(name, wf_info[name]["skill"]))
-
-        # No resource is in resource store -> machine hv to wait
-        self.waiting_for_workforce = OrderedDict()
+            # No resource is in resource store -> machine hv to wait
+            self.wf_waiting = OrderedDict()
 
     def request_tp(self, process_requesting, next_process, distance_to_requesting, distance_to_destination, min_capa, part=None):
         self.monitor.record(self.env.now, process_requesting, None, part_id=part.id, event="tp_request")
@@ -55,9 +54,6 @@ class Resource(object):
 
         self.model[next_process].tp_store.put(tp)
         self.tp_location[tp.name].append(next_process)
-    #
-    # def request_wf(self, process_requesting):
-    #     print(0)
 
     def delaying(self):
         yield self.env.timeout(self.delay_time)
@@ -176,11 +172,12 @@ class Process(object):
             part = yield self.buffer_to_process.get()
             # next process
             step = 1
-            while not part.data[(part.step + step, 'process_time')]:
-                if part.data[(part.step + step, 'process')] != 'Sink':
-                    step += 1
-                else:
-                    break
+            # while not part.data[(part.step + step, 'process_time')]:
+            #     if part.data[(part.step + step, 'process')] != 'Sink':
+            #         step += 1
+            #         break
+            #     else:
+            #         break
 
             next_process_name = part.data[(part.step + step, 'process')]
             next_process = self.model[next_process_name]
@@ -200,6 +197,7 @@ class Process(object):
                 self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_Sink")
 
             part.step += step
+            self.parts_sent += 1
 
             if (len(self.buffer_to_process.items) < self.buffer_to_process.capacity) and (len(self.waiting_machine) > 0):
                 self.waiting_machine.popitem(last=False)[1].succeed()  # delay = (part_id, event)
@@ -251,17 +249,26 @@ class Machine(object):
             self.working = True
             wf = None
             # process_time
-            if self.process_time is None:  # part에 process_time이 미리 주어지는 경우
+            if self.process_time == None:  # part에 process_time이 미리 주어지는 경우
                 proc_time = part.data[(part.step, "process_time")]
             else:  # service time이 정해진 경우 --> 1) fixed time / 2) Stochastic-time
                 proc_time = self.process_time if type(self.process_time) == float else self.process_time()
             self.planned_proc_time = proc_time
 
             if self.workforce is True:
-                self.monitor.record(self.env.now, self.process_name, self.name, part_id=part.id, event="workforce_request")
+                resource_item = list(map(lambda item: item.name, self.resource.wf_store.items))
+                self.monitor.record(self.env.now, self.process_name, self.name, part_id=part.id, event="workforce_request", resource=resource_item)
+                while len(self.resource.wf_store.items) == 0:
+                    self.resource.wf_waiting[part.id] = self.env.event()
+                    self.monitor.record(self.env.now, self.process_name, self.name, part_id=part.id,
+                                        event="delay_start_machine_cus_no_resource")
+                    yield self.resource.wf_waiting[part.id]  # start delaying
+
+                self.monitor.record(self.env.now, self.process_name, self.name, part_id=part.id,
+                                    event="delay_finish_machine_cus_yes_resource")
                 wf = yield self.resource.wf_store.get()
                 self.monitor.record(self.env.now, self.process_name, self.name, part_id=part.id,
-                                    event="workforce get in the machine")
+                                    event="workforce get in the machine", resource=wf.name)
             while proc_time:
                 if self.MTTF is not None:
                     self.env.process(self.break_machine())
@@ -299,10 +306,12 @@ class Machine(object):
             self.working = False
 
             if self.workforce is True:
-                self.monitor.record(self.env.now, self.process_name, self.name, part_id=part.id, event="workforce_used_out")
+                self.monitor.record(self.env.now, self.process_name, self.name, part_id=part.id, event="workforce_used_out", resource=wf.name)
                 self.resource.wf_store.put(wf)
                 self.monitor.record(self.env.now, self.process_name, self.name, part_id=part.id,
-                                    event="workforce get out the machine")
+                                    event="workforce get out the machine", resource=wf.name)
+                if (len(self.resource.wf_store.items) > 0) and (len(self.resource.wf_waiting) > 0):
+                    self.resource.wf_waiting.popitem(last=False)[1].succeed()  # delay = (part_id, event)
 
             # start delaying at machine cause buffer_to_process is full
             if len(self.out.items) == self.out.capacity:
@@ -365,13 +374,15 @@ class Monitor(object):
         self.part_id=[]
         self.process=[]
         self.subprocess=[]
+        self.resource = []
 
-    def record(self, time, process, subprocess, part_id=None, event=None):
+    def record(self, time, process, subprocess, part_id=None, event=None, resource=None):
         self.time.append(time)
         self.event.append(event)
         self.part_id.append(part_id)
         self.process.append(process)
         self.subprocess.append(subprocess)
+        self.resource.append(resource)
 
     def save_event_tracer(self):
         event_tracer = pd.DataFrame(columns=['Time', 'Event', 'Part', 'Process', 'SubProcess'])
@@ -380,6 +391,7 @@ class Monitor(object):
         event_tracer['Part'] = self.part_id
         event_tracer['Process'] = self.process
         event_tracer['SubProcess'] = self.subprocess
+        event_tracer['Resource'] = self.resource
         event_tracer.to_csv(self.filepath)
 
         return event_tracer
