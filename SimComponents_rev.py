@@ -3,11 +3,13 @@ import os
 import random
 import pandas as pd
 import numpy as np
+import networkx as nx
 from collections import OrderedDict, namedtuple
 
-#save_path = './result'
-#if not os.path.exists(save_path):
-#    os.makedirs(save_path)
+save_path = './result'
+if not os.path.exists(save_path):
+   os.makedirs(save_path)
+
 
 class Resource(object):
     def __init__(self, env, model, monitor, tp_info=None, wf_info=None, delay_time=None):
@@ -28,6 +30,8 @@ class Resource(object):
             for name in tp_info.keys():
                 self.tp_location[name] = []
                 self.tp_store.put(transporter(name, tp_info[name]["capa"], tp_info[name]["v_loaded"], tp_info[name]["v_unloaded"]))
+            # No resource is in resource store -> machine hv to wait
+            self.tp_waiting = OrderedDict()
         if wf_info is not None:
             for name in wf_info.keys():
                 self.wf_location[name] = []
@@ -35,16 +39,16 @@ class Resource(object):
             # No resource is in resource store -> machine hv to wait
             self.wf_waiting = OrderedDict()
 
-    def request_tp(self, process_requesting, next_process, distance_to_requesting, distance_to_destination, min_capa, part=None):
-        self.monitor.record(self.env.now, process_requesting, None, part_id=part.id, event="tp_request")
-        if len(self.tp_store.items) > 0:
-            tp = yield self.tp_store.get(lambda item: item.capa == min_capa)
-        else:
+    def request_tp(self, process_requesting, next_process, part=None):
+        self.monitor.record(self.env.now, process_requesting, None, part_id=part.id, event="tp_request", resource=self.tp_store.items)
+        if len(self.tp_store.items) > 0:  # 만약 tp_store에 남아있는 transporter가 있는 경우
+            tp = yield self.tp_store.get()
+        else:  # transporter가 전부 다른 공정에 가 있을 경우
             tp_location_list = []
             for name in self.tp_location.keys():
                 tp_location_list.append(self.tp_location[name][-1])
             location = random.choice(tp_location_list)
-            tp = yield self.model[location].tp_store.get(lambda item: item.capa == min_capa)
+            tp = yield self.model[location].tp_store.get()
 
         yield self.env.timeout(distance_to_requesting / tp.v_unloaded)
         self.monitor.record(self.env.now, process_requesting, None, part_id=part.id, event="tp_arriving")
@@ -348,7 +352,6 @@ class Machine(object):
         #     self.action.interrupt()
 
 
-
 class Sink(object):
     def __init__(self, env, monitor):
         self.env = env
@@ -431,3 +434,12 @@ class Routing(object):
         return idx_possible
 
 
+class Network(object):
+    def __init__(self, graph):
+        self.graph = graph
+
+    def get_shortest_path_distance(self, location_type_from, location_type_to):
+        shortest_path_length_dict = dict(nx.shortest_path_length(self.graph, weight='distance'))
+        shortest_path_length = shortest_path_length_dict[location_type_from][location_type_to]
+
+        return shortest_path_length
