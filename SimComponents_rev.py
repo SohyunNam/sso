@@ -44,25 +44,35 @@ class Resource(object):
     def request_tp(self, current_process):
         tp, waiting = False, False
 
-        self.monitor.record(self.env.now, current_process, None, part_id=None, event="tp_request", resource=self.tp_store.items)
         if len(self.tp_store.items) > 0:  # 만약 tp_store에 남아있는 transporter가 있는 경우
             tp = yield self.tp_store.get()
+            self.monitor.record(self.env.now, None, None, part_id=None, event="tp_going_to_requesting_process",
+                                resource=tp.name)
             return tp, waiting
         else:  # transporter가 전부 다른 공정에 가 있을 경우
             tp_location_list = []
             for name in self.tp_location.keys():
+                if not self.tp_location[name]:
+                    continue
                 tp_current_location = self.tp_location[name][-1]
                 if len(self.model[tp_current_location].tp_store.items) > 0:  # 해당 공정에 놀고 있는 tp가 있다면
                     tp_location_list.append(self.tp_location[name][-1])
+
             if len(tp_location_list) == 0:  # 유휴 tp가 없는 경우
                 waiting = True
                 return tp, waiting
+
             else:  # 유휴 tp가 있어 part을 실을 수 있는 경우
                 # tp를 호출한 공정 ~ 유휴 tp 사이의 거리 중 가장 짧은 데에서 호출
-                distance = list(map(lambda i: self.network.get_shortest_path_distance(tp_location_list[i], current_process), tp_location_list))
+                distance = []
+                for location in tp_location_list:
+                    called_distance = self.network.get_shortest_path_distance(location, current_process)
+                    distance.append(called_distance)
+                # distance = list(map(lambda i: self.network.get_shortest_path_distance(tp_location_list[i], current_process), tp_location_list))
                 location_idx = distance.index(min(distance))
                 location = tp_location_list[location_idx]
                 tp = yield self.model[location].tp_store.get()
+                self.monitor.record(self.env.now, None, None, part_id=None, event="tp_going_to_requesting_process", resource=tp.name)
                 yield self.env.timeout(distance[location_idx]/tp.v_unloaded)  # 현재 위치까지 오는 시간
                 return tp, waiting
 
@@ -207,24 +217,31 @@ class Process(object):
 
                 # part transfer
                 if self.transporter is True:  # using transporter
+                    self.monitor.record(self.env.now, self.name, None, part_id=None, event="tp_request")
                     tp, waiting = False, True
                     while waiting:
                         tp, waiting = yield self.env.process(self.resource.request_tp(self.name))
                         if not waiting:
                             break
                         # if waiting is True == All tp is moving == process hv to delay
-                        self.resource.wf_waiting[part.id] = self.env.event()
-                        self.monitor.record(self.env.now, self.name, None, part_id=part.id,
-                                            event="delay_start_cus_no_tp")
-                        yield self.resource.wf_waiting[part.id]
-                        self.monitor.record(self.env.now, self.name, None, part_id=part.id,
-                                            event="delay_start_cus_yes_tp")
+                        else:
+                            self.resource.tp_waiting[part.id] = self.env.event()
+                            self.monitor.record(self.env.now, self.name, None, part_id=part.id,
+                                                event="delay_start_cus_no_tp")
+                            yield self.resource.tp_waiting[part.id]
+                            self.monitor.record(self.env.now, self.name, None, part_id=part.id,
+                                                event="delay_finish_cus_yes_tp")
+                            continue
                     if tp is not None:
+                        self.monitor.record(self.env.now, self.name, None, part_id=part.id,
+                                            event="tp_going_to_next_process", resource=tp.name)
                         distance_to_move = self.network.get_shortest_path_distance(self.name, next_process_name)
                         yield self.env.timeout(distance_to_move/tp.v_loaded)
+                        self.monitor.record(self.env.now, next_process_name, None, part_id=part.id,
+                                            event="tp_finished_transferred_to_next_process", resource=tp.name)
                         next_process.buffer_to_machine.put(part)
                         self.monitor.record(self.env.now, self.name, None, part_id=part.id,
-                                            event="part_transferred_to_next_process")
+                                            event="part_transferred_to_next_process_with_tp")
                         next_process.tp_store.put(tp)
                         self.resource.tp_location[tp.name].append(next_process_name)
                         # 가용한 tp 하나 발생 -> delay 끝내줌
@@ -473,11 +490,12 @@ class Routing(object):
 
 
 class Network(object):
-    def __init__(self, graph):
+    def __init__(self, graph, gis_graph):
         self.graph = graph
+        self.gis_graph = gis_graph
 
     def get_shortest_path_distance(self, location_type_from, location_type_to):
-        shortest_path_length_dict = dict(nx.shortest_path_length(self.graph, weight='distance'))
+        shortest_path_length_dict = dict(nx.shortest_path_length(self.gis_graph, weight='distance'))
         shortest_path_length = shortest_path_length_dict[location_type_from][location_type_to]
 
         return shortest_path_length

@@ -44,13 +44,20 @@ for key, values in process_dict.items():
 # gis network : 각 작업장 간의 gis 상의 연결관계 및 거리 정보에 대한 network 생성
 # gis_network의 node 명칭 : location_type(작업장 이름)
 # gis_network의 edge attribute : 'distance' -> 두 작업장 사이의 거리
-gis_network = nx.Graph()
+# gis network : 각 작업장 간의 gis 상의 연결관계 및 거리 정보에 대한 network 생성
 
-location_types = ['작업장_{0}'.format(i + 1) for i in range(len(process_list))]
-#print(location_types)
-for i, location_type in enumerate(location_types):
-    if i < len(location_types) - 1:
-        gis_network.add_edges_from([(location_types[i], location_types[i + 1], {'distance': np.random.randint(0, 20)})])
+location_types = [process for process in process_list]
+
+# generate complete graph
+gis_network = nx.complete_graph(location_types)
+
+for location_type_1 in gis_network.nodes():
+    for location_type_2 in gis_network.nodes():
+        if location_type_1 != location_type_2:
+            if location_type_1 != 'Sink' or location_type_2 != 'Sink':
+                gis_network.edges[location_type_1, location_type_2]['distance'] = np.random.randint(100)
+            else:
+                gis_network.edges[location_type_1, location_type_2]['distance'] = 0
 
 # proc_network : 각 공정정보 및 공정 간 연결관계를 나타내는 network 생성
 # proc_network의 node 명칭 : 각 Process 명
@@ -58,8 +65,8 @@ for i, location_type in enumerate(location_types):
 # proc_network의 edge attribute : 'shortest_distance', 'relation_type'
 proc_network = nx.DiGraph()
 # add nodes of proc_network
-for i, node in enumerate(process_list):
-    proc_network.add_nodes_from([(node, {'location_type': '작업장_{0}'.format(i + 1)})])
+for node in process_list:
+    proc_network.add_nodes_from([(node, {'location_type': node})])
 
 
 for key, values in process_dict.items():
