@@ -1,9 +1,7 @@
-import networkx as nx
-import matplotlib.pyplot as plt
+from collections import OrderedDict
+my_dict = OrderedDict()
+my_dict[1] = 1
+my_dict[2] = 2
+my_dict[3] = 3
 
-G = nx.Graph()
-G.add_node(1)
-G.add_nodes_from([2, 3])
-G.add_edge(1, 2)
-nx.draw(G, with_labels=True)
-plt.show()
+print(my_dict.popitem(last=False))

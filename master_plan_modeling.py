@@ -14,7 +14,7 @@ start_run = time.time()
 
 ## Pre-Processing
 # DATA INPUT
-data_all = pd.read_excel('../data/MCM_ACTIVITY.xls')
+data_all = pd.read_excel('./data/MCM_ACTIVITY.xls')
 data = data_all[['PROJECTNO', 'ACTIVITYCODE', 'LOCATIONCODE', 'PLANSTARTDATE', 'PLANFINISHDATE', 'PLANDURATION']]
 
 # DATA PRE-PROCESSING
@@ -77,15 +77,8 @@ env = simpy.Environment()
 model = {}
 server_num = np.full(len(process_list), 1)
 
-monitor = Monitor('./result/event_log_master_plan_with_tp.csv')
-network = Network(proc_network)
-
-source = Source(env, parts, model, monitor)
-for i in range(len(process_list) + 1):
-    if i == len(process_list):
-        model['Sink'] = Sink(env, monitor)
-    else:
-        model[process_list[i]] = Process(env, process_list[i], server_num[i], model, Monitor)
+Monitor = Monitor('./result/event_log_master_plan_with_tp.csv')
+Network = Network(proc_network)
 
 # Resource
 tp_info = {}
@@ -93,6 +86,15 @@ tp_num = 20
 for i in range(tp_num):
     tp_info["TP_{0}".format(i+1)] = {"capa": 100, "v_loaded": 0.5, "v_unloaded": 1.0}
 Resource = Resource(env, model, Monitor, tp_info=tp_info)
+
+source = Source(env, parts, model, Monitor)
+for i in range(len(process_list) + 1):
+    if i == len(process_list):
+        model['Sink'] = Sink(env, Monitor)
+    else:
+        model[process_list[i]] = Process(env, process_list[i], server_num[i], model, Monitor, resource=Resource, network=Network, transporter=True)
+
+
 
 start = time.time()
 env.run()
