@@ -118,6 +118,7 @@ class Source(object):
         self.converting = convert_dict
 
         self.action = env.process(self.run())
+        self.sent = 0
 
     def run(self):
         while len(self.model['Assembly'].assembly_parts):
@@ -140,15 +141,19 @@ class Source(object):
                     next_process = random.choice(next_process_list)
                 else:
                     next_process = next_process_list
+
                 self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_first_process")
                 self.model[next_process].buffer_to_machine.put(part)
+                self.sent += 1
                 # print(part.id, 'is transferred to ', next_process, 'at ', self.env.now)
 
                 # if len(self.parts) == 0:
                 #     print("all parts are sent at : ", self.env.now)
                 #     break
             else:
-                print(len(self.model['Assembly'].assembly_parts))
+                print(self.model['Assembly'].assembly_parts)
+
+                break
 
 
 class Process(object):
@@ -231,7 +236,7 @@ class Process(object):
             if part.upper_block is not None:
                 if part.data[(part.step, 'activity')] == 'C11' or part.data[(part.step, 'activity')] == 'C12' or \
                         part.data[(part.step, 'activity')] == 'C13' or part.data[(part.step, 'activity')] == 'C14' or \
-                        part.data[(part.step, 'activity')] == 'C15':
+                        part.data[(part.step, 'activity')] == 'C15' or part.data[(part.step, 'activity')] == 'B11':
                     self.model['Assembly'].assemble(part)
                     continue
 
@@ -564,12 +569,15 @@ class Assembly(object):
         self.source = source
         self.monitor = monitor
 
+        self.assembled_part = 0
+
     def assemble(self, part):
         upper_block = self.assembly_parts[part.upper_block]
 
         upper_block.assemble_part.append(part)
         self.monitor.record(self.env.now, 'Assemble', None, part_id=part.id, event="assemble to {}".format(upper_block.id))
         if len(upper_block.lower_block_list) == len(upper_block.assemble_part):  ## 필요한 블록이 다 모이면
+            self.assembled_part += len(upper_block.assemble_part)
             new_create_upper_block = self.assembly_parts.pop(upper_block.id)
             self.source.parts[new_create_upper_block.id] = new_create_upper_block
 

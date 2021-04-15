@@ -54,7 +54,8 @@ convert_to_process = {'가공소조립부 1야드' : '선각공장', '가공소�
                                                         '2야드 도장 1공장', '2야드 도장 2공장', '2야드 도장 3공장',
                                                         '2야드 도장 5공장', '2야드 도장 6공장'],
                       '선실생산부': '선실공장', '선행의장부': PE_Shelter, '기장부': PE_Shelter, '의장1부': PE_Shelter,
-                      '의장3부': PE_Shelter, '도장1부': '도장1부', '도장2부': '도장2부', '발판지원부': '발판지원부', '외부': '외부'}
+                      '의장3부': PE_Shelter, '도장1부': '도장1부', '도장2부': '도장2부', '발판지원부': '발판지원부', '외부': '외부',
+                      '포항공장부': '포항공장부', '특수선': '특수선', '해양외업생산부': '해양외업생산부'}
 
 shop_list = []
 for shop in convert_to_process.values():
@@ -73,11 +74,11 @@ for i in range(len(PE_Shelter)):
 for shop in shop_list:
     if '쉘터' not in shop:
         if '도크' not in shop:
-            machine_dict[shop] = 10
+            machine_dict[shop] = 1000
         elif shop == '2도크':
-            machine_dict[shop] = 2
+            machine_dict[shop] = 1000
         else:
-            machine_dict[shop] = 1
+            machine_dict[shop] = 1000
 print('defining converting process and number of machines is done at ', time.time() - start_running)
 
 '''
@@ -141,13 +142,13 @@ assembly_upper_list = list(block_assembly.drop_duplicates(['upper block code'])[
 adding information about lower block in Part class 
 it can contain multiple blocks
 '''
-for block_code in assembly_upper_list:
-    if block_code in block_list:
-        temp = block_assembly[block_assembly['upper block code'] == block_code]
+for upper_block in assembly_upper_list:
+    if upper_block in block_list:
+        temp = block_assembly[block_assembly['upper block code'] == upper_block]
         for i in range(len(temp)):
             lower_block = temp.iloc[i]['block code']
             if lower_block in parts:
-                parts[block_code].lower_block_list.append(lower_block)
+                parts[upper_block].lower_block_list.append(lower_block)
 
 '''
 adding information about upper block in Part class 
