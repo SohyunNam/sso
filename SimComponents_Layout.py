@@ -121,38 +121,37 @@ class Source(object):
         self.sent = 0
 
     def run(self):
-        while len(self.model['Assembly'].assembly_parts):
-            if len(self.parts):
-                self.parts = OrderedDict(
-                    sorted(self.parts.items(), key = lambda x: x[1].data[(0, 'start_time')]))
+        while True:
+            self.parts = OrderedDict(
+                sorted(self.parts.items(), key = lambda x: x[1].data[(0, 'start_time')]))
 
-                part = self.parts.popitem(last=False)[1]
-                IAT = part.data[(0, 'start_time')] - self.env.now
-                if IAT > 0:
-                    yield self.env.timeout(part.data[(0, 'start_time')] - self.env.now)
+            part = self.parts.popitem(last=False)[1]
+            IAT = part.data[(0, 'start_time')] - self.env.now
+            if IAT > 0:
+                yield self.env.timeout(part.data[(0, 'start_time')] - self.env.now)
 
-                # record: part_created
-                self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_created")
-                # print(part.id, 'is created at ', self.env.now)
-                # next process
-                next_process_name = part.data[(part.step, 'process')]
-                next_process_list = self.converting[next_process_name]
-                if type(next_process_list) == list:
-                    next_process = random.choice(next_process_list)
-                else:
-                    next_process = next_process_list
-
-                self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_first_process")
-                self.model[next_process].buffer_to_machine.put(part)
-                self.sent += 1
-                # print(part.id, 'is transferred to ', next_process, 'at ', self.env.now)
-
-                # if len(self.parts) == 0:
-                #     print("all parts are sent at : ", self.env.now)
-                #     break
+            # record: part_created
+            self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_created")
+            # print(part.id, 'is created at ', self.env.now)
+            # next process
+            next_process_name = part.data[(part.step, 'process')]
+            next_process_list = self.converting[next_process_name]
+            if type(next_process_list) == list:
+                next_process = random.choice(next_process_list)
             else:
-                print(self.model['Assembly'].assembly_parts)
+                next_process = next_process_list
 
+            self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_first_process")
+            self.model[next_process].buffer_to_machine.put(part)
+            self.sent += 1
+            # print(part.id, 'is transferred to ', next_process, 'at ', self.env.now)
+
+            if (len(self.parts) == 0) and (len(self.model['Assembly'].assembly_parts) > 0):
+                self.model['Assembly'].delay.append(self.env.event())
+                yield self.model['Assembly'].delay[-1]
+                continue
+            elif (len(self.parts) ==0) and (len(self.model['Assembly'].assembly_parts) == 0):
+                print("all parts are sent at : ", self.env.now)
                 break
 
 
@@ -188,6 +187,7 @@ class Process(object):
         self.len_of_server = []
         self.waiting_machine = OrderedDict()
         self.waiting_pre_process = OrderedDict()
+        self.area_used = 0.0
 
         # buffer and machine
         self.buffer_to_machine = simpy.Store(env, capacity=capa_to_machine)
@@ -232,22 +232,16 @@ class Process(object):
         while True:
             part = yield self.buffer_to_process.get()
 
-            ## 조립일 경우 Assembly 함수로 보냄
+            # 조립일 경우 Assembly 함수로 보냄
             if part.upper_block is not None:
                 if part.data[(part.step, 'activity')] == 'C11' or part.data[(part.step, 'activity')] == 'G4B' or \
                         part.data[(part.step, 'activity')] == 'C13' or part.data[(part.step, 'activity')] == 'C14' or \
-                        part.data[(part.step, 'activity')] == 'B11':
+                        part.data[(part.step, 'activity')] == 'B11' or part.data[(part.step, 'activity')] == 'K4B':
                     self.model['Assembly'].assemble(part)
                     continue
 
             # next process
             step = 1
-            # while not part.data[(part.step + step, 'process_time')]:
-            #     if part.data[(part.step + step, 'process')] != 'Sink':
-            #         step += 1
-            #         break
-            #     else:
-            #         break
             next_process_name_before_convert = part.data[(part.step + step, 'process')]
             if next_process_name_before_convert != 'Sink':
                 next_process_list = self.converting[next_process_name_before_convert]
@@ -307,8 +301,8 @@ class Process(object):
                     next_process.buffer_to_machine.put(part)
                     self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_next_process")
             else:  # next_process == Sink
-                next_process.put(part)
                 self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_Sink")
+                next_process.put(part)
 
             part.step += step
             self.parts_sent += 1
@@ -360,6 +354,8 @@ class Machine(object):
         while True:
             self.broken = True
             part = yield self.machine.get()
+            # if part.id == "A0001_H11P3":
+            #     print(0)
             self.working = True
             wf = None
             # process_time
@@ -511,7 +507,7 @@ class Monitor(object):
         event_tracer['Process'] = self.process
         event_tracer['SubProcess'] = self.subprocess
         event_tracer['Resource'] = self.resource
-        event_tracer.to_csv(self.filepath)
+        event_tracer.to_csv(self.filepath, encoding='utf-8-sig')
 
         return event_tracer
 
@@ -570,6 +566,7 @@ class Assembly(object):
         self.monitor = monitor
 
         self.assembled_part = 0
+        self.delay = []
 
     def assemble(self, part):
         upper_block = self.assembly_parts[part.upper_block]
@@ -580,5 +577,6 @@ class Assembly(object):
             self.assembled_part += len(upper_block.assemble_part)
             new_create_upper_block = self.assembly_parts.pop(upper_block.id)
             self.source.parts[new_create_upper_block.id] = new_create_upper_block
-
             self.monitor.record(self.env.now, 'Assemble', None, part_id=new_create_upper_block.id, event="ready to create")
+            if len(self.delay):
+                self.delay.pop(0).succeed()

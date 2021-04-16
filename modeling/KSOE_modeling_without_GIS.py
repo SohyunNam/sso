@@ -73,10 +73,9 @@ for i in range(len(PE_Shelter)):
 
 for shop in shop_list:
     if '쉘터' not in shop:
-        if shop == '2도크':
-            machine_dict[shop] = 2
-        elif ('도크' in shop) and (shop != '2도크'):
-            machine_dict[shop] = 1
+
+        if '도크' in shop:
+            machine_dict[shop] = 10
         elif shop == '외부':
             machine_dict[shop] = 10000
         else:
@@ -193,13 +192,12 @@ model['Assembly'] = Assembly(env, upper_block_data, source, monitor)
 print('modeling is done at ', time.time() - start_running)
 
 start_simulation = time.time()
-env.run(until=500)
+env.run()
 finish_simulation = time.time()
 
 print('#' * 80)
 print("Results of simulation")
 print('#' * 80)
-
 
 # 코드 실행 시간
 print("data pre-processing : ", start_simulation - start_running)
@@ -207,20 +205,3 @@ print("simulation execution time :", finish_simulation - start_simulation)
 print("total time : ", finish_simulation - start_running)
 
 
-tq_list = []
-# block_array = np.array(block_list)
-for i in range(len(monitor.event)):
-    if monitor.event[i] == "part_created":
-        if monitor.part_id[i] in lower_part_list:
-            idx = np.argwhere(lower_part_list == monitor.part_id[i])
-            lower_part_list = np.delete(lower_part_list, idx)
-        elif monitor.part_id[i] in upper_part_list:
-            idx = np.argwhere(upper_part_list == monitor.part_id[i])
-            upper_part_list = np.delete(upper_part_list, idx)
-        else:
-            tq_list.append(monitor.part_id[i])
-
-print(lower_part_list)
-print(upper_part_list)
-print(tq_list)
-event_tracer = monitor.save_event_tracer()
