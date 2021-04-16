@@ -73,12 +73,16 @@ for i in range(len(PE_Shelter)):
 
 for shop in shop_list:
     if '쉘터' not in shop:
-        if '도크' not in shop:
-            machine_dict[shop] = 1000
-        elif shop == '2도크':
-            machine_dict[shop] = 1000
+        if shop == '2도크':
+            machine_dict[shop] = 2
+        elif ('도크' in shop) and (shop != '2도크'):
+            machine_dict[shop] = 1
+        elif shop == '외부':
+            machine_dict[shop] = 10000
         else:
-            machine_dict[shop] = 1000
+            machine_dict[shop] = 30
+
+
 print('defining converting process and number of machines is done at ', time.time() - start_running)
 
 '''

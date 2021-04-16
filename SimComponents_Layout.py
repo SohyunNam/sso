@@ -234,9 +234,9 @@ class Process(object):
 
             ## 조립일 경우 Assembly 함수로 보냄
             if part.upper_block is not None:
-                if part.data[(part.step, 'activity')] == 'C11' or part.data[(part.step, 'activity')] == 'C12' or \
+                if part.data[(part.step, 'activity')] == 'C11' or part.data[(part.step, 'activity')] == 'G4B' or \
                         part.data[(part.step, 'activity')] == 'C13' or part.data[(part.step, 'activity')] == 'C14' or \
-                        part.data[(part.step, 'activity')] == 'C15' or part.data[(part.step, 'activity')] == 'B11':
+                        part.data[(part.step, 'activity')] == 'B11':
                     self.model['Assembly'].assemble(part)
                     continue
 
