@@ -2,8 +2,9 @@ import pandas as pd
 import numpy as np
 import simpy
 import time
-import datetime
+import os
 from collections import OrderedDict
+import matplotlib.pyplot as plt
 from SimComponents_Layout import Part, Source, Process, Sink, Monitor, Assembly
 
 start_running = time.time()
@@ -73,15 +74,12 @@ for i in range(len(PE_Shelter)):
 
 for shop in shop_list:
     if '쉘터' not in shop:
-
         if '도크' in shop:
             machine_dict[shop] = 10
         elif shop == '외부':
             machine_dict[shop] = 10000
         else:
             machine_dict[shop] = 30
-
-
 print('defining converting process and number of machines is done at ', time.time() - start_running)
 
 '''
@@ -124,19 +122,31 @@ for block_code in block_list:
         n += 1
 
     data.loc[block_code][(n, 'process')] = 'Sink'
+
 print('reassembling data is done at ', time.time() - start_running)
 # data.sort_values(by=[(0, 'start_time')], axis=0, inplace=True)
 
 ''' ## input data from dataframe to Part class ## '''
 parts = OrderedDict()
+block_assembly['block code'] = block_assembly['호선'] + '_' + block_assembly['블록']
+block_assembly['area'] = block_assembly['길이'] * block_assembly['폭']  # 18개의 block은 area = 0
+avg_block_area = np.mean(block_assembly['area'])
+
 for i in range(len(data)):
-    parts[data.index[i]] = Part(data.index[i], data.iloc[i])
+    part_id = data.index[i]
+    if part_id in block_assembly['block code']:
+        idx = block_assembly.index[block_assembly['block code'] == part_id].tolist()[0]
+        if block_assembly['area'][idx]:
+            parts[data.index[i]] = Part(data.index[i], data.iloc[i], area=block_assembly['area'][idx])
+        else:
+            parts[data.index[i]] = Part(data.index[i], data.iloc[i], area=avg_block_area)
+    else:
+        parts[data.index[i]] = Part(data.index[i], data.iloc[i], area=avg_block_area)
 
 ''' ## BOM data pre-processing'''
 block_assembly['호선'] = block_assembly['호선'].apply(lambda x: str(x))
 block_assembly['블록'] = block_assembly['블록'].apply(lambda x: str(x))
 block_assembly['상위블록'] = block_assembly['상위블록'].apply(lambda x: str(x))
-block_assembly['block code'] = block_assembly['호선'] + '_' + block_assembly['블록']
 block_assembly['upper block code'] = block_assembly['호선'] + '_' + block_assembly['상위블록']
 assembly_list = list(block_assembly.drop_duplicates(['block code'])['block code'])
 assembly_upper_list = list(block_assembly.drop_duplicates(['upper block code'])['upper block code'])
@@ -170,7 +180,7 @@ for upper_block in assembly_upper_list:
     if upper_block in parts.keys():
         upper_block_part = parts.pop(upper_block)
         upper_block_data[upper_block] = upper_block_part
-
+len(upper_block_data)
 lower_part_list = np.array(list(parts.keys()))
 upper_part_list = np.array(list(upper_block_data.keys()))
 
@@ -204,4 +214,28 @@ print("data pre-processing : ", start_simulation - start_running)
 print("simulation execution time :", finish_simulation - start_simulation)
 print("total time : ", finish_simulation - start_running)
 
+monitor.save_event_tracer()
+
+save_path = '../png'
+if not os.path.exists(save_path):
+   os.makedirs(save_path)
+from matplotlib import font_manager, rc
+rc('font', family='HCR Dotum')
+
+for process in model:
+    if process == "Assembly" or process == 'Sink':
+        continue
+    else:
+        filepath = '../png/' + process + '.png'
+        x = model[process].event_time
+        y = model[process].event_area
+        plt.plot(x, y)
+        plt.title(process)
+        plt.xlabel('TIME')
+        plt.ylabel('AREA')
+        plt.savefig(filepath)
+        plt.show()
+        print(process, model[process].in_process - model[process].parts_sent)
+
+print(0)
 

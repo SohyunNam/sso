@@ -95,7 +95,7 @@ class Resource(object):
 
 
 class Part(object):
-    def __init__(self, name, data):
+    def __init__(self, name, data, area=0.0):
         # 해당 Part의 이름
         self.id = name
         # 작업 시간 정보
@@ -104,6 +104,8 @@ class Part(object):
         self.lower_block_list = []
         self.upper_block = None
         self.assemble_part = []
+        # 블록 면적
+        self.area = area
         # 작업을 완료한 공정의 수
         self.step = 0
 
@@ -181,6 +183,7 @@ class Process(object):
         self.converting = convert_dict
 
         # variable defined in class
+        self.in_process = 0
         self.parts_sent = 0
         self.parts_sent_to_machine = 0
         self.machine_idx = 0
@@ -188,6 +191,8 @@ class Process(object):
         self.waiting_machine = OrderedDict()
         self.waiting_pre_process = OrderedDict()
         self.area_used = 0.0
+        self.event_area = []
+        self.event_time = []
 
         # buffer and machine
         self.buffer_to_machine = simpy.Store(env, capacity=capa_to_machine)
@@ -212,6 +217,10 @@ class Process(object):
                 delaying_time = self.delay_time if type(self.delay_time) == float else self.delay_time()
                 yield self.env.timeout(delaying_time)
             part = yield self.buffer_to_machine.get()
+            self.in_process += 1
+            self.area_used += part.area
+            self.event_area.append(self.area_used)
+            self.event_time.append(self.env.now)
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="Process_entered")
 
             ## Rouring logic 추가 할 예정
@@ -238,6 +247,10 @@ class Process(object):
                         part.data[(part.step, 'activity')] == 'C13' or part.data[(part.step, 'activity')] == 'C14' or \
                         part.data[(part.step, 'activity')] == 'B11' or part.data[(part.step, 'activity')] == 'K4B':
                     self.model['Assembly'].assemble(part)
+                    self.area_used -= part.area
+                    self.event_area.append(self.area_used)
+                    self.event_time.append(self.env.now)
+                    self.parts_sent += 1
                     continue
 
             # next process
@@ -292,6 +305,9 @@ class Process(object):
                         self.monitor.record(self.env.now, self.name, None, part_id=part.id,
                                             event="part_transferred_to_next_process_with_tp")
                         next_process.tp_store.put(tp)
+                        self.area_used -= part.area
+                        self.event_area.append(self.area_used)
+                        self.event_time.append(self.env.now)
                         self.resource.tp_location[tp.name].append(next_process_name)
                         # 가용한 tp 하나 발생 -> delay 끝내줌
                         if len(self.resource.tp_waiting) > 0:
@@ -299,10 +315,16 @@ class Process(object):
 
                 else:  # not using transporter
                     next_process.buffer_to_machine.put(part)
+                    self.area_used -= part.area
+                    self.event_area.append(self.area_used)
+                    self.event_time.append(self.env.now)
                     self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_next_process")
             else:  # next_process == Sink
                 self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_Sink")
                 next_process.put(part)
+                self.area_used -= part.area
+                self.event_area.append(self.area_used)
+                self.event_time.append(self.env.now)
 
             part.step += step
             self.parts_sent += 1
@@ -312,8 +334,8 @@ class Process(object):
 
 
 class Machine(object):
-    def __init__(self, env, name, process_name, resource, process_time, priority, out, waiting, monitor,
-                 MTTF, MTTR, initial_broken_delay, workforce):
+    def __init__(self, env, name, process_name, resource, process_time, priority, out, waiting, monitor, MTTF, MTTR,
+                 initial_broken_delay, workforce):
         # input data
         self.env = env
         self.name = name
