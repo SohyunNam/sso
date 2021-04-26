@@ -4,6 +4,7 @@ import random
 import pandas as pd
 import numpy as np
 import networkx as nx
+import copy
 from collections import OrderedDict, namedtuple
 
 save_path = '../result'
@@ -104,6 +105,7 @@ class Part(object):
         self.lower_block_list = []
         self.upper_block = None
         self.assemble_part = []
+        self.assembly = False  # assemble 공정을 거쳤는지 여부
         # 블록 면적
         self.area = area
         # 작업을 완료한 공정의 수
@@ -136,12 +138,12 @@ class Source(object):
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_created")
             # print(part.id, 'is created at ', self.env.now)
             # next process
-            next_process_name = part.data[(part.step, 'process')]
-            next_process_list = self.converting[next_process_name]
-            if type(next_process_list) == list:
-                next_process = random.choice(next_process_list)
-            else:
-                next_process = next_process_list
+            next_process = part.data[(part.step, 'process')]
+            # next_process_list = self.converting[next_process_name]
+            # if type(next_process_list) == list:
+            #     next_process = random.choice(next_process_list)
+            # else:
+            #     next_process = next_process_list
 
             self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="part_transferred_to_first_process")
             self.model[next_process].buffer_to_machine.put(part)
@@ -191,6 +193,8 @@ class Process(object):
         self.waiting_machine = OrderedDict()
         self.waiting_pre_process = OrderedDict()
         self.area_used = 0.0
+        self.finish_time = 0.0
+        self.start_time = 0.0
         self.event_area = []
         self.event_time = []
 
@@ -217,6 +221,8 @@ class Process(object):
                 delaying_time = self.delay_time if type(self.delay_time) == float else self.delay_time()
                 yield self.env.timeout(delaying_time)
             part = yield self.buffer_to_machine.get()
+            if self.in_process == 0:
+                self.start_time = self.env.now
             self.in_process += 1
             self.area_used += part.area
             self.event_area.append(self.area_used)
@@ -242,30 +248,35 @@ class Process(object):
             part = yield self.buffer_to_process.get()
 
             # 조립일 경우 Assembly 함수로 보냄
-            if part.upper_block is not None:
+            if (part.upper_block is not None) and (part.assembly is False):
                 if part.data[(part.step, 'activity')] == 'C11' or part.data[(part.step, 'activity')] == 'G4B' or \
                         part.data[(part.step, 'activity')] == 'C13' or part.data[(part.step, 'activity')] == 'C14' or \
-                        part.data[(part.step, 'activity')] == 'B11' or part.data[(part.step, 'activity')] == 'K4B':
-                    self.model['Assembly'].assemble(part)
-                    self.area_used -= part.area
-                    self.event_area.append(self.area_used)
-                    self.event_time.append(self.env.now)
-                    self.parts_sent += 1
-                    continue
+                        part.data[(part.step, 'activity')] == 'B11' or part.data[(part.step, 'activity')] == 'K4B' or \
+                        part.data[(part.step, 'activity')] == 'C12':
+                    assemble_part = copy.copy(part)
+                    part.assembly = True
+                    self.model['Assembly'].assemble(assemble_part)
+
+
+                    # self.area_used -= part.area
+                    # self.event_area.append(self.area_used)
+                    # self.event_time.append(self.env.now)
+                    # self.parts_sent += 1
+                    # continue
 
             # next process
             step = 1
-            next_process_name_before_convert = part.data[(part.step + step, 'process')]
-            if next_process_name_before_convert != 'Sink':
-                next_process_list = self.converting[next_process_name_before_convert]
-                if type(next_process_list) == list:
-                    next_process_name = random.choice(next_process_list)
-                else:
-                    next_process_name = next_process_list
-                next_process = self.model[next_process_name]
-            else:
-                next_process = self.model['Sink']
-
+            next_process_name = part.data[(part.step + step, 'process')]
+            # if next_process_name == 'Sink':
+            #     # next_process_list = self.converting[next_process_name_before_convert]
+            #     # if type(next_process_list) == list:
+            #     #     next_process_name = random.choice(next_process_list)
+            #     # else:
+            #     #     next_process_name = next_process_list
+            #     next_process = self.model['Sink']
+            # else:
+            #     next_process = self.model[next_process_name]
+            next_process = self.model[next_process_name]
             if next_process.__class__.__name__ == 'Process':
                 # buffer's capacity of next process is full -> have to delay
                 if len(next_process.buffer_to_machine.items) == next_process.buffer_to_machine.capacity:
@@ -328,6 +339,7 @@ class Process(object):
 
             part.step += step
             self.parts_sent += 1
+            self.finish_time = self.env.now
 
             if (len(self.buffer_to_process.items) < self.buffer_to_process.capacity) and (len(self.waiting_machine) > 0):
                 self.waiting_machine.popitem(last=False)[1].succeed()  # delay = (part_id, event)
@@ -493,13 +505,14 @@ class Sink(object):
         self.completed_part = []
 
     def put(self, part):
-        if part.upper_block is None:
-            self.parts_rec += 1
-            self.last_arrival = self.env.now
-            self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="completed")
-            self.completed_part.append(part.id)
-        else:
-            self.model['Assembly'].assemble(part)
+        # if part.upper_block is None:
+        self.parts_rec += 1
+        self.last_arrival = self.env.now
+        self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="completed")
+        self.completed_part.append(part.id)
+        # else:
+        #     self.model['Assembly'].assemble(part)
+        #     print(part.id)
 
 
 class Monitor(object):
