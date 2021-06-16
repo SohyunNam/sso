@@ -12,7 +12,7 @@ if not os.path.exists(save_path):
 
 transporter = namedtuple("Transporter", "name, capa, v_loaded, v_unloaded")
 workforce = namedtuple("Workforce", "name, skill")
-block = namedtuple("Block", "name, location")
+block = namedtuple("Block", "name, location, step")
 
 class Resource(object):
     def __init__(self, env, model, monitor, tp_info=None, wf_info=None, delay_time=None, network=None):
@@ -97,7 +97,7 @@ class Part:
 
         self.in_child = []
         self.location = []
-        self.part = simpy.Store(env)
+        self.part_store = simpy.Store(env)
         self.num_clone = 0
         self.process_delay = env.event()
         self.resource_delay = env.event()
@@ -107,35 +107,45 @@ class Part:
             step = 0
             while True:
                 if step == 0:  # 가장 처음이면 part creating
-                    part = block(self.name, "source")
-                    self.part.put(part)
+                    part = block(self.name, "source", step)
+                    self.part_store.put(part)
                     self.monitor.record(self.env.now, None, None, part_id=self.name, event="part_created")
                 else:
-                    if len(self.part.items):  # store에 유휴 part가 있으면
-                        part = yield self.part.get()
+                    if len(self.part_store.items):  # store에 유휴 part가 있으면
+                        part = yield self.part_store.get()
                     else:  # 겹치는 일정으로 인해 유휴 part를 만들어야 할 때  -> part.name_1
                         self.num_clone += 1
-                        part = block(self.name + "_{0}".format(self.num_clone), self.location[-1])
+                        part = block(self.name + "_{0}".format(self.num_clone), self.location[-1], step)
 
-                temp = self.data[step, :]
-                yield self.env.timeout(temp['start_time'] - self.env.now)
+                process = self.processes[self.data[(step, 'process')]]
+                if process.name == 'Sink':
+                    self.processes['Sink'].put(part)
+                    part.location = 'Sink'
+                    break
+                else:
+                    yield self.env.timeout(self.data[(step,'start_time')] - self.env.now)
 
-                process = self.processes[temp['process']]
-                work = self.data
-                # if not process.flag:
-                #     if min(next_process.predict_finish) - self.env.now > 1:
-                #         print(0)
-                #     self.monitor.record(self.env.now)
+                    work = self.data[(step, 'work')]  # 공정공종
 
-                # 적치장 vs.process
-                적치장 개새끼이이이이이이이이이이잉이이이이이
-                # # 처음이거나 tp 사용 단계가 아닌 경우 tp 사용 않고 바로 다음 공정으로
-                # if step == 0 or work in ['C', 'C_0', 'C_1']:
-                #     self.processes[process].buffer_to_machine.put(part)
-                # else:  ## tp를 사용해야 하는 경우
+                    # 처음이거나 tp 사용 단계가 아닌 경우 tp 사용 않고 바로 다음 공정으로
+                    if step == 0 or work in ['C', 'C_0', 'C_1']:
+                        self.processes[process].buffer_to_machine.put(part)
+                        part.location = process
+                    else:  ## tp를 사용해야 하는 경우
+                        self._tp(process, part.location, part)
 
-
-
+    def return_to_part(self, part):
+        next_start_time = part.data[(part.step + 1, 'start_time')]
+        if next_start_time - self.env.now > 1:  # 적치장 가야 함
+            next_process = part.data[(part.step + 1, 'process')]
+            stock = self._find_stock(next_process)
+            if part.data[(part.step, 'work')] in ['C', 'C_0', 'C_1']:  # tp 불필요
+                self.stocks[stock].put(part, next_start_time)
+                self.monitor.record(self.env.now, part.location, None, part_id=part.name, event="go_to_stock")
+            else:
+                self._tp(next_process, part.location, part)
+        else:
+            self.part_store.put(part)
 
     def _tp(self, next_process, current_process, part):
         self.monitor.record(self.env.now, current_process, None, part_id=part.name, event="tp_request")
@@ -150,7 +160,7 @@ class Part:
                 self.monitor.record(self.env.now, current_process, None, part_id=part.name,
                                     event="delay_start_cus_no_tp")
                 yield self.resource.tp_waiting[self.name]
-                self.monitor.record(self.env.now, self.current_process, None, part_id=part.name,
+                self.monitor.record(self.env.now, current_process, None, part_id=part.name,
                                     event="delay_finish_cus_yes_tp")
                 continue
         if tp:
@@ -164,6 +174,7 @@ class Part:
             self.monitor.record(self.env.now, current_process, None, part_id=part.name,
                                 event="part_transferred_to_next_process_with_tp")
             next_process.tp_store.put(tp)
+            part.location = next_process.name
             self.resource.tp_location[tp.name].append(next_process)
             # 가용한 tp 하나 발생 -> delay 끝내줌
             if len(self.resource.tp_waiting) > 0:
@@ -189,18 +200,49 @@ class Part:
         return next_stock
 
 
-
-class StockYard:
-    def __init__(self, env, name, monitor):
-        self.name = name
+class Sink:  ## 후우우... 
+    def __init__(self, env, processes, parts, monitor):
         self.env = env
+        self.name = 'Sink'
+        self.processes = processes
+        self.parts = parts
         self.monitor = monitor
 
-        self.store = []
+        # self.tp_store = simpy.FilterStore(env)  # transporter가 입고 - 출고 될 store
+        self.parts_rec = 0
+        self.last_arrival = 0.0
+        self.completed_part = []
 
     def put(self, part):
+        # if part.upper_block is None:
+        self.parts_rec += 1
+        self.last_arrival = self.env.now
+        self.monitor.record(self.env.now, self.name, None, part_id=part.id, event="completed")
+        self.completed_part.append(part.id)
+
+class StockYard:
+    def __init__(self, env, name, parts, monitor):
+        self.name = name
+        self.env = env
+        self.parts = parts
+        self.monitor = monitor
+
+        self.stock_yard = OrderedDict()
+
+    def put(self, part, out_time):
         self.monitor.record(self.env.now, self.name, None, part_id=part, event="Stock_in")
-        self.store.append(part)
+        part.location = self.name
+        self.stock_yard[part.name] = [out_time, part]
+
+    def out_to_part(self):
+        while True:
+            self.stock_yard = OrderedDict(sorted(self.stock_yard.items(), key=lambda x: x[1][0]))
+            part, next_start = self.stock_yard.popitem(last=False)[1][1], self.stock_yard.popitem(last=False)[1][0]
+            yield self.env.timeout(next_start - self.env.timeout)
+
+            self.parts[part.name].return_to_part(part)
+            self.monitor.record(self.env.now, self.name, None, part_id=part.name, event="Stock_out")
+
 
 class Monitor(object):
     def __init__(self, filepath):
