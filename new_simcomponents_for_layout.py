@@ -211,7 +211,7 @@ class Sink:
         # self.tp_store = simpy.FilterStore(env)  # transporter가 입고 - 출고 될 store
         self.parts_rec = 0
         self.last_arrival = 0.0
-        # self.completed_part = []
+        self.completed_part = []
 
     def put(self, part):
         if self.parts[part.name].parent:  # 상위 블록이 있는 경우
@@ -221,6 +221,7 @@ class Sink:
         self.parts_rec += 1
         self.last_arrival = self.env.now
         self.monitor.record(self.env.now, self.name, None, part_id=part.name, event="completed")
+
 
 class Process(object):
     def __init__(self, env, name, machine_num, processes, parts, monitor, resource=None,
@@ -234,6 +235,7 @@ class Process(object):
         self.processes = processes
         self.parts = parts
         self.monitor = monitor
+        self.resource = resource
         self.capa = capacity
         self.machine_num = machine_num
         self.routing_logic = routing_logic
@@ -535,6 +537,3 @@ class Routing(object):
                 idx_possible = i
                 break
         return idx_possible
-
-
-
